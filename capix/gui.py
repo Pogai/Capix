@@ -3,7 +3,7 @@
 
 交互：
   托盘左键/热键 → 框选 → 取景框 + 工具条[计数][截图][复制][设置][✕]
-  首次截图 → 出现框侧长图预览窗（可缩放/滚轮/拖拽），并随截图刷新
+  首次截图 → 出现框左侧长图预览窗（可缩放/滚轮/拖拽/可关闭），并随截图刷新
   复制 → 长图入剪贴板+存档；不立即清零（支持多次复制），
          下一次截图时才从 0 开始新一轮拼接
   设置 → 参数对话框（最大截图张数 1~20，默认 20，即时生效并持久化）
@@ -370,10 +370,23 @@ class App:
         """首次截图后才创建预览窗。"""
         if self.preview is None and self._region is not None:
             try:
-                self.preview = preview.PreviewWindow(self.root, self._region)
+                self.preview = preview.PreviewWindow(
+                    self.root, self._region, on_close=self._on_preview_closed
+                )
             except Exception:
                 log_error("创建预览窗失败", exc_info=True)
                 self.preview = None
+
+    def _on_preview_closed(self):
+        """用户点了预览窗的 ✕：本次取景内不再自动弹出（重新框选恢复）。"""
+        log("长图预览已关闭（本次取景内不再自动显示）")
+        self._panel_msg("长图预览已关闭，重新框选后恢复")
+        self._notify("长图预览已关闭", "本次取景内不再显示，重新框选后恢复")
+        if self.overlay is not None:
+            try:
+                self.overlay.toast("长图预览已关闭", ok=True, ms=1800)
+            except Exception:
+                pass
 
     def _close_overlay(self):
         if self.overlay is not None:

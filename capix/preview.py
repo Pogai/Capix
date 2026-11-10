@@ -2,13 +2,13 @@
 """长图预览窗（懒显示 + 可缩放/滚轮/拖拽）。
 
 - 首次截图后才创建/显示（由上层控制）；未截前不出现。
-- 按框外右侧（放不下左侧）贴附，深色卡片 + 标题栏 + 图区。
+- 按框外左侧（左侧放不下换右侧）贴附，深色卡片 + 标题栏 + 图区。
 - 图区为视口：默认按宽度适配；支持
     · 鼠标滚轮：上下滚动
     · Ctrl+滚轮：以光标为中心缩放
     · 按住左键拖拽：平移
     · 双击：复位（按宽度适配）
-    · 标题栏 [＋][－][⟲] 按钮：放大/缩小/复位
+    · 标题栏 [＋][－][⟲][✕] 按钮：放大/缩小/复位/关闭预览
 - 渲染只绘制可见视口（O(卡面积)），内容长不影响流畅度；不抢焦点、在框外不被截入。
 """
 
@@ -25,6 +25,7 @@ _HINT_FG = "#6f7789"
 _BORDER = "#39404e"
 _BTN_BG = "#2b3242"
 _BTN_HOVER = "#3b9dff"
+_BTN_HOVER_CLOSE = "#e05555"
 
 _TITLE_FONT = ("Microsoft YaHei UI", 8)
 _HINT_FONT = ("Microsoft YaHei UI", 7)
@@ -37,9 +38,11 @@ _MAX_SCALE = 4.0
 
 
 class PreviewWindow:
-    def __init__(self, root, region, width=210):
+    def __init__(self, root, region, width=210, on_close=None):
         self.root = root
         self.x, self.y, self.w, self.h = (int(v) for v in region)
+        self.on_close = on_close    # 用户点 ✕ 关闭预览时回调上层
+        self.closed = False         # 本次会话内已关闭 → 不再自动显示
 
         self._src = None            # (w, h, rgb)
         self._scale = 1.0
@@ -75,16 +78,17 @@ class PreviewWindow:
         # 标题
         self.cv.create_text(_PAD + 4, 1 + _TITLE_H / 2, anchor="w",
                             text="长图预览", fill=_TITLE_FG, font=_TITLE_FONT)
-        # 标题栏按钮 ＋ － ⟲
+        # 标题栏按钮 ＋ － ⟲ ✕（✕ 关闭预览，固定最右）
         self._hbtns = {}
         bx = self.cw - 8
-        for name, glyph in (("fit", "⟲"), ("zin", "＋"), ("zout", "－")):
+        for name, glyph in (("close", "✕"), ("fit", "⟲"), ("zin", "＋"), ("zout", "－")):
+            hcol = _BTN_HOVER_CLOSE if name == "close" else _BTN_HOVER
             self.cv.create_oval(bx - 7, 1 + _TITLE_H / 2 - 7, bx + 7, 1 + _TITLE_H / 2 + 7,
                                 fill=_BTN_BG, outline="", tags=("h_%s" % name, "hbg_%s" % name))
             self.cv.create_text(bx, 1 + _TITLE_H / 2, text=glyph, fill="#d6dbe6",
                                 font=("Microsoft YaHei UI", 8), tags=("h_%s" % name,))
             self.cv.tag_bind("h_%s" % name, "<Enter>",
-                             lambda e, n=name: self.cv.itemconfigure("hbg_%s" % n, fill=_BTN_HOVER))
+                             lambda e, n=name, h=hcol: self.cv.itemconfigure("hbg_%s" % n, fill=h))
             self.cv.tag_bind("h_%s" % name, "<Leave>",
                              lambda e, n=name: self.cv.itemconfigure("hbg_%s" % n, fill=_BTN_BG))
             self.cv.tag_bind("h_%s" % name, "<Button-1>",
@@ -157,23 +161,22 @@ class PreviewWindow:
     def _place(self):
         sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
         W, H = self.cw + 3, self.ch + 3
-        rx = self.x + self.w + 12
-        ry = self.y + max(0, (self.h - H) // 2)
-        if rx + W <= sw:
-            ry = max(0, min(ry, sh - H))
-            self.win.wm_geometry("%dx%d+%d+%d" % (W, H, rx, ry))
-            return True
         lx = self.x - 12 - W
-        if lx >= 0:
-            ry = max(0, min(ry, sh - H))
+        ry = self.y + max(0, (self.h - H) // 2)
+        ry = max(0, min(ry, sh - H))
+        if lx >= 0:                  # 优先贴取景框左侧
             self.win.wm_geometry("%dx%d+%d+%d" % (W, H, lx, ry))
+            return True
+        rx = self.x + self.w + 12    # 左侧放不下 → 换右侧
+        if rx + W <= sw:
+            self.win.wm_geometry("%dx%d+%d+%d" % (W, H, rx, ry))
             return True
         return False
 
     # ---------- 数据 ----------
     def set_source(self, w, h, rgb):
         """设置源长图（RGB）。每次刷新都回到“按宽适配 + 最新一张”。"""
-        if not self.visible:
+        if self.closed or not self.visible:
             return
         if not w or not h or not rgb:
             return
@@ -193,6 +196,8 @@ class PreviewWindow:
         （渲染是 ~600 行纯 Python 像素循环，曾导致拖拽卡顿）。仅在从隐藏
         恢复显示时补渲染一次。"""
         self.x, self.y, self.w, self.h = (int(v) for v in region)
+        if self.closed:
+            return
         ok = self._place()
         self.visible = bool(ok)
         try:
@@ -348,7 +353,26 @@ class PreviewWindow:
         vh = iy1 - iy0
         self._oy = max(0.0, h - vh / self._scale)
 
+    def close(self):
+        """关闭预览：本次取景内不再显示（重新框选后由新实例恢复）。"""
+        if self.closed:
+            return
+        self.closed = True
+        self.visible = False
+        try:
+            self.win.withdraw()
+        except Exception:
+            pass
+        if self.on_close is not None:
+            try:
+                self.on_close()
+            except Exception:
+                pass
+
     def _btn(self, name):
+        if name == "close":
+            self.close()
+            return
         if name == "zin":
             self._zoom_at(self.cw / 2, self.ch / 2, 1.25)
         elif name == "zout":
