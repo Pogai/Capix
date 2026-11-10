@@ -1,0 +1,19 @@
+# 运行时生成（不入库）
+settings.json
+logs/
+output/
+
+# 构建产物
+dist/
+build/_work/
+build/*.spec
+
+# Python 缓存
+__pycache__/
+*.pyc
+
+# 智能体临时目录
+.temp/
+
+# 本目录下临时放置的其他项目/素材工作区（不属于本工具）
+图标透明化处理/
